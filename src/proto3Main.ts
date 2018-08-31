@@ -6,6 +6,7 @@ import path = require('path');
 import cp = require('child_process');
 import { Proto3CompletionItemProvider } from './proto3Suggest';
 import { Proto3LanguageDiagnosticProvider } from './proto3Diagnostic';
+import { Proto3DefinitionProvider } from './proto3DefinitionProvider';
 import { Proto3Compiler } from './proto3Compiler';
 import { PROTO3_MODE } from './proto3Mode';
 
@@ -30,8 +31,9 @@ export function activate(ctx: vscode.ExtensionContext): void {
         compiler.compileAllProtos();
     }));
 
+    ctx.subscriptions.push(vscode.languages.registerDefinitionProvider(PROTO3_MODE, new Proto3DefinitionProvider()));
 
-    //console.log('Congratulations, your extension "vscode-pb3" is now active!');
+    console.log('Congratulations, your extension "vscode-pb3" is now active!');
 
     vscode.languages.setLanguageConfiguration(PROTO3_MODE.language, {
         indentationRules: {
