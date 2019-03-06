@@ -3,12 +3,12 @@ const parser = require('./proto3Parser.js');
 
 
 class Definition {
-    constructor(readonly file: vscode.Uri, readonly pos: vscode.Position) {
+    constructor(readonly name: string, readonly uri: vscode.Uri, readonly location: ProtoLocation) {
     }
-}
 
-interface Definitions {
-    [index: string]: Definition;
+    toUripos() {
+        return new UriPosition(this.uri, new vscode.Position(this.location.start.line - 1, this.location.start.column - 1));
+    }
 }
 
 interface ProtoObject {
@@ -20,44 +20,64 @@ interface ProtoContent {
     type: string;
 }
 
+interface ObjectDefinition {
+    name: string;
+    location: ProtoLocation;
+}
+
 interface ProtoMessage {
     type: string;
-    name: string;
+    definition: ObjectDefinition;
     content: Array<ProtoContent>;
-    pos: ProtoPosition;
+    location: ProtoLocation;
 }
 
 interface ProtoEnum {
     type: string;
     name: string;
-    pos: ProtoPosition;
+    definition: ObjectDefinition;
+}
+
+interface ProtoLocation {
+    start: ProtoPosition;
+    end: ProtoPosition;
 }
 
 interface ProtoPosition {
-    start: Location;
-    end: Location;
-}
-
-interface Location {
     offset: number;
     line: number;
     column: number;
 }
 
+/**
+ * @class ParserResult
+ */
 class ParserResult {
-    private readonly definitions: Definitions = {};
+    private readonly definitions: Array<Definition> = [];
 
     public add(uri: vscode.Uri, obj: ProtoObject) {
-        for (let o of obj.content) {
+        for (const o of obj.content) {
             this.addContent(uri, o);
         }
     }
 
     public getDefinition(name: string): Definition {
-        if (this.definitions[name]) {
-            return this.definitions[name];
+        return this.definitions.find((definition) => {
+            return definition.name === name;
+        });
+    }
+
+    public getNamespaceAt(line: number): string {
+        let ns = "";
+        for (const d of this.definitions) {
+            if ((d.location.start.line <= line) && (line < d.location.end.line)) {
+                const l = d.name.lastIndexOf(".");
+                if (l > ns.length) {
+                    ns = d.name.slice(0, l);
+                }
+            }
         }
-        return undefined;
+        return ns;
     }
 
     private addContent(uri: vscode.Uri, content: ProtoContent, prefix: string = "") {
@@ -70,22 +90,24 @@ class ParserResult {
     }
 
     private addMessage(uri: vscode.Uri, msg: ProtoMessage, prefix: string = "") {
-        this.addDef(uri, prefix + msg.name, msg.pos);
+        this.addDef(uri, prefix + msg.definition.name, msg.definition.location);
         for (const c of msg.content) {
-            this.addContent(uri, c, prefix + msg.name + ".");
+            this.addContent(uri, c, prefix + msg.definition.name + ".");
         }
     }
 
     private addEnum(uri: vscode.Uri, msg: ProtoEnum, prefix: string = "") {
-        this.addDef(uri, prefix + msg.name, msg.pos);
+        this.addDef(uri, prefix + msg.name, msg.definition.location);
     }
 
-    private addDef(uri: vscode.Uri, name: string, pos: ProtoPosition) {
-        const p = new vscode.Position(pos.start.line - 1, pos.start.column - 1);
-        this.definitions[name] = new Definition(uri, p);
+    private addDef(uri: vscode.Uri, name: string, range: ProtoLocation) {
+        this.definitions.push(new Definition(name, uri, range));
     }
 }
 
+/**
+ * @class Parser
+ */
 class Parser {
     private readonly document: vscode.TextDocument;
 
@@ -109,15 +131,23 @@ class Parser {
  * @param position 
  */
 function isPositionInString(document: vscode.TextDocument, position: vscode.Position): boolean {
-    let lineText = document.lineAt(position.line).text;
-    let lineTillCurrentPosition = lineText.substr(0, position.character);
+    const lineText = document.lineAt(position.line).text;
+    const lineTillCurrentPosition = lineText.substr(0, position.character);
 
     // Count the number of double quotes in the line till current position. Ignore escaped double quotes
     let doubleQuotesCnt = (lineTillCurrentPosition.match(/\"/g) || []).length;
-    let escapedDoubleQuotesCnt = (lineTillCurrentPosition.match(/\\\"/g) || []).length;
+    const escapedDoubleQuotesCnt = (lineTillCurrentPosition.match(/\\\"/g) || []).length;
 
     doubleQuotesCnt -= escapedDoubleQuotesCnt;
     return doubleQuotesCnt % 2 === 1;
+}
+
+/**
+ * 
+ */
+class UriPosition {
+    constructor(readonly uri: vscode.Uri, readonly pos: vscode.Position) {
+    }
 }
 
 /**
@@ -126,7 +156,7 @@ function isPositionInString(document: vscode.TextDocument, position: vscode.Posi
  * @param position 
  * @param token 
  */
-function definitionLocation(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Definition> {
+function definitionLocation(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<UriPosition> {
     const wordRange = document.getWordRangeAtPosition(position);
     const lineText = document.lineAt(position.line).text;
     const word = wordRange ? document.getText(wordRange) : '';
@@ -134,29 +164,27 @@ function definitionLocation(document: vscode.TextDocument, position: vscode.Posi
         return Promise.resolve(null);
     }
 
-    const parser = new Parser(document);
-    const result = parser.parse();
-    console.log(result);
-    const definition = result.getDefinition(word);
-    if (!definition) {
-        return Promise.resolve(null);
-    }
-
-    return Promise.resolve(definition);
-    
-    /*
-    return new Promise<Definition>((resolve, reject) => {
-        let pos = document.getText().indexOf("message " + word);
-        if (pos == -1) {
-            return Promise.resolve(null);
+    return new Promise<UriPosition>((resolve, reject) => {
+        const uri = document.uri;
+        try {
+            const parser = new Parser(document);
+            const result = parser.parse();
+            const ns = result.getNamespaceAt(position.line);
+            const definition = result.getDefinition(ns + word);
+            if (!definition) {
+                return resolve(null);
+            }
+            return resolve(definition.toUripos());
+        } catch (error) {
+            // bad parsing, fallback mode
+            // TODO : better handling
+            const pos = document.getText().indexOf("message " + word);
+            if (pos == -1) {
+                return resolve(null);
+            }
+            return resolve(new UriPosition(uri, document.positionAt(pos + 8)));
         }
-
-        let definitionInfo = {
-            file: document.uri,
-            pos: document.positionAt(pos + 8)
-        };
-        return resolve(definitionInfo);
-    });*/
+    });
 }
 
 /**
@@ -164,12 +192,9 @@ function definitionLocation(document: vscode.TextDocument, position: vscode.Posi
  */
 export class Proto3DefinitionProvider implements vscode.DefinitionProvider {
 
-    constructor() {
-    }
-
-    public provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Thenable<vscode.Location> {
-        return definitionLocation(document, position, token).then(definitionInfo => {
-            return new vscode.Location(definitionInfo.file, definitionInfo.pos);
+    public provideDefinition(doc: vscode.TextDocument, pos: vscode.Position, token: vscode.CancellationToken): Thenable<vscode.Location> {
+        return definitionLocation(doc, pos, token).then(definitionInfo => {
+            return new vscode.Location(definitionInfo.uri, definitionInfo.pos);
         });
     }
 }

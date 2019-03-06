@@ -20,8 +20,22 @@ ident = a:letter b:(letter / decDigit / "_")*
 { return a+b.join("") }
 fullIdent = a:ident b:("." ident)*
 { b.unshift([a]); return b.map(function(c){return c.join('')}).join('') }
-messageName = ident
+
+messageName = a:ident
+{
+	return {
+		name:a,
+		location: location()
+	}
+}
 enumName = ident
+{
+	return {
+		name:a,
+		location: location()
+	}
+}
+
 fieldName = ident
 oneofName = ident
 mapName = ident
@@ -172,10 +186,11 @@ enum = "enum" ws? a:enumName ws? b:enumBody
 { 
 	return {
 		type: 'enum', 
-		name: a, 
+		name: a.name, 
+		definition: a, 
 		content: b.content, 
 		opts: b.opts ,
-		pos: location()
+		location: location()
 	} 
 }
 
@@ -203,10 +218,10 @@ message = "message" ws a:messageName ws? b:messageBody
 { 
 	return {
 		type: 'message', 
-		name: a, 
+		definition: a, 
 		content: b.content, 
 		opts: b.opts, 
-		pos: location() 
+		location: location() 
 	}
 }
 
